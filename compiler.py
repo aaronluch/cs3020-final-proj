@@ -103,6 +103,9 @@ def typecheck(program: Program) -> Program:
     def tc_exp(e: Expr, env: TEnv) -> type:
         match e:     
             case FieldRef(xxx): # IMPLEMENT HERE
+                # typecheck `e` and make sure it's a `DataclassType`: return the type
+                # of `field` from the `DataclassType` of `e`
+                # DataclassType is declared above globally
                 pass    
                    
             case Call(func, args):
@@ -146,8 +149,8 @@ def typecheck(program: Program) -> Program:
     def tc_stmt(s: Stmt, env: TEnv):
         match s:
             case ClassDef(e, field): # IMPLEMENT HERE
-                # tc e and make sure its a DataclassType (the one we made at the very top)
-                # return the TYPE of field from DataclassType of e
+                # add mapping from class name to a `Callable` WHICH WILL
+                # return the relevant `DataclassType` to the type env
                 pass    
             
             case FunctionDef(name, params, body_stmts, return_type):
@@ -229,9 +232,11 @@ def rco(prog: Program) -> Program:
     def rco_stmt(stmt: Stmt, new_stmts: List[Stmt]) -> Stmt:
         match stmt:
             case FieldRef(x, field): # IMPLEMENT here
+                # fieldref, make sure the expression inside the fieldref is atomic
                 pass
             
             case ClassDef(name, field): # IMPLEMENT here
+                # classdef doesn't change (idk what that means just in the notes)
                 pass
             case FunctionDef(name, params, body_stmts, return_type):
                 return FunctionDef(name, params, rco_stmts(body_stmts), return_type)
@@ -1151,9 +1156,10 @@ compiler_passes = {
 }
 
 
-def run_compiler(s, logging=False):
-    global tuple_var_types, function_names
+def run_compiler(s, logging=False): # IDK if need to fix this up for new compiler (will figure out)
+    global tuple_var_types, function_names, dataclass_var_types
     tuple_var_types = {}
+    dataclass_var_types = {}
     function_names = set()
 
     def print_prog(current_program):
