@@ -200,7 +200,7 @@ def typecheck(program: Program) -> Program:
             for x in env:
                 if isinstance(env[x], tuple):
                     tuple_var_types[x] = env[x]
-                if isinstance(env[x], DataclassType):
+                if isinstance(env[x], DataclassType): # we do that here
                     dataclass_var_types[x] = env[x]
 
             return program
