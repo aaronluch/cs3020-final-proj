@@ -15,6 +15,7 @@ gensym_num = 0
 global_logging = True
 
 tuple_var_types = {}
+dataclass_var_types = {} # NEW type to record dataclass types
 function_names = set()
 
 def log(label, value):
@@ -60,6 +61,11 @@ TEnv = Dict[str, type]
 class Callable:
     args: List[type]
     output_type: type
+    
+@dataclass
+class DataclassType:
+    name: str
+    fields: Dict[str, type]
 
 def typecheck(program: Program) -> Program:
     """
@@ -95,7 +101,10 @@ def typecheck(program: Program) -> Program:
     }
 
     def tc_exp(e: Expr, env: TEnv) -> type:
-        match e:
+        match e:     
+            case FieldRef(xxx): # IMPLEMENT HERE
+                pass    
+                   
             case Call(func, args):
                 arg_types = [tc_exp(a, env) for a in args]
                 match tc_exp(func, env):
@@ -104,7 +113,6 @@ def typecheck(program: Program) -> Program:
                         return return_type
                     case t:
                         raise Exception('expected function type, but got:', t)
-
             case Var(x):
                 return env[x]
             case Constant(i):
@@ -137,6 +145,11 @@ def typecheck(program: Program) -> Program:
 
     def tc_stmt(s: Stmt, env: TEnv):
         match s:
+            case ClassDef(e, field): # IMPLEMENT HERE
+                # tc e and make sure its a DataclassType (the one we made at the very top)
+                # return the TYPE of field from DataclassType of e
+                pass    
+            
             case FunctionDef(name, params, body_stmts, return_type):
                 function_names.add(name)
                 arg_types = [t for x, t in params]
@@ -178,7 +191,8 @@ def typecheck(program: Program) -> Program:
         for s in stmts:
             tc_stmt(s, env)
 
-    match program:
+    match program:  # WE ALSO need to record all dataclass-valued variables 
+                    # (like we did for tuple-valued vars in A6) [into dataclass_var_types]
         case Program(stmts):
             env = {}
             tc_stmts(stmts, env)
@@ -186,6 +200,8 @@ def typecheck(program: Program) -> Program:
             for x in env:
                 if isinstance(env[x], tuple):
                     tuple_var_types[x] = env[x]
+                if isinstance(env[x], DataclassType):
+                    dataclass_var_types[x] = env[x]
 
             return program
 
@@ -212,6 +228,11 @@ def rco(prog: Program) -> Program:
 
     def rco_stmt(stmt: Stmt, new_stmts: List[Stmt]) -> Stmt:
         match stmt:
+            case FieldRef(x, field): # IMPLEMENT here
+                pass
+            
+            case ClassDef(name, field): # IMPLEMENT here
+                pass
             case FunctionDef(name, params, body_stmts, return_type):
                 return FunctionDef(name, params, rco_stmts(body_stmts), return_type)
             case Return(e):
@@ -275,6 +296,16 @@ def rco(prog: Program) -> Program:
         case Program(stmts):
             return Program(rco_stmts(stmts))
 
+
+def eliminate_objects(prog: Program) -> Program:
+    # 1. Delete class definitions
+    # -------
+    # 2. Replace function calls to object constructors with `Prim('tuple', args)` 
+    # (need to know which functions are actually object constructors; can be recorded in the typechecker)
+    # -------
+    # 3. Replace field references with tuple subscript 
+    # (need to know the index of each named field in the class defintiion; can be recorded in the typechecker)
+    pass
 
 ##################################################
 # explicate-control
