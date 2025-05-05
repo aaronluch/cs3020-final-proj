@@ -17,6 +17,7 @@ global_logging = True
 tuple_var_types = {}
 dataclass_var_types = {} # NEW type to record dataclass types
 function_names = set()
+_homes: Dict[str, x86.Arg] = {}
 
 def log(label, value):
     if global_logging:
@@ -73,7 +74,7 @@ def typecheck(program: Program) -> Program:
     :param program: The Lfun program to typecheck
     :return: The program, if it is well-typed
     """
-
+    has_classes = any(isinstance(s, ClassDef) for s in program.stmts) # check if there are any classes
     prim_arg_types = {
         'add':   [int, int],
         'sub':   [int, int],
@@ -102,20 +103,38 @@ def typecheck(program: Program) -> Program:
 
     def tc_exp(e: Expr, env: TEnv) -> type:
         match e:     
-            case FieldRef(xxx): # IMPLEMENT HERE
+            case FieldRef(o, field):
                 # typecheck `e` and make sure it's a `DataclassType`: return the type
                 # of `field` from the `DataclassType` of `e`
                 # DataclassType is declared above globally
-                pass    
+                t_obj = tc_exp(o, env)
+                if not isinstance(t_obj, DataclassType):
+                    raise Exception('expected dataclass type, but got:', t_obj)
+                if field not in t_obj.fields:
+                    raise Exception('field not found in dataclass:', field)
+                return t_obj.fields[field]
+                    
                    
             case Call(func, args):
                 arg_types = [tc_exp(a, env) for a in args]
-                match tc_exp(func, env):
-                    case Callable(param_types, return_type):
-                        assert param_types == arg_types
-                        return return_type
-                    case t:
-                        raise Exception('expected function type, but got:', t)
+                if isinstance(func, Var) and func.name in dataclass_var_types:
+                    dt = dataclass_var_types[func.name]
+                    n = len(arg_types)
+                    
+                    if not (n == 0 or n == len(dt.fields)):
+                        raise TypeError(f'Expected {len(dt.fields)} arguments, but got {n}')
+                    if n == len(dt.fields):
+                        expected = list(dt.fields.values())
+                        for actual, exp in zip(arg_types, expected):
+                            assert actual == exp
+                        return dt
+                    
+                    # normal function call
+                    fn_type = tc_exp(func, env)
+                    assert isinstance(fn_type, Callable)
+                    assert fn_type.args == arg_types
+                    return fn_type.output_type
+                
             case Var(x):
                 return env[x]
             case Constant(i):
@@ -148,26 +167,43 @@ def typecheck(program: Program) -> Program:
 
     def tc_stmt(s: Stmt, env: TEnv):
         match s:
-            case ClassDef(e, field): # IMPLEMENT HERE
+            case ClassDef(name, _superclass, body):
                 # add mapping from class name to a `Callable` WHICH WILL
                 # return the relevant `DataclassType` to the type env
-                pass    
+                field_map = {fname: ftype for fname, ftype in body}
+                dt = DataclassType(name, field_map)
+                dataclass_var_types[name] = dt
+                param_types = [ftype for _, ftype in body]
+                env[name] = Callable(param_types, dt)
+                    
             
             case FunctionDef(name, params, body_stmts, return_type):
                 function_names.add(name)
-                arg_types = [t for x, t in params]
-                env[name] = Callable(arg_types, return_type)
-                new_env = env.copy()
 
-                for x, t in params:
-                    new_env[x] = t
+                # Build the Callable signature from the *raw* annotations:
+                arg_types = [t for _, t in params]
+                env[name] = Callable(arg_types, return_type)
+
+                # Now bind the params for the body, differently in Pass1 vs Pass2:
+                new_env = env.copy()
+                for pname, ptype in params:
+                    if has_classes:
+                        # Pass 1: bind "Rectangle" → DataclassType
+                        if isinstance(ptype, str) and ptype in dataclass_var_types:
+                            new_env[pname] = dataclass_var_types[ptype]
+                        else:
+                            new_env[pname] = ptype
+                    else:
+                        # Pass 2: bind "Rectangle" → tuple-of-field-types
+                        if isinstance(ptype, str) and ptype in dataclass_var_types:
+                            dt = dataclass_var_types[ptype]
+                            new_env[pname] = tuple(dt.fields.values())
+                        else:
+                            new_env[pname] = ptype
 
                 new_env['return value'] = return_type
                 tc_stmts(body_stmts, new_env)
-
-                for x in new_env:
-                    if isinstance(new_env[x], tuple):
-                        tuple_var_types[x] = new_env[x]
+                
 
             case Return(e):
                 assert env['return value'] == tc_exp(e, env)
@@ -200,12 +236,12 @@ def typecheck(program: Program) -> Program:
             env = {}
             tc_stmts(stmts, env)
 
-            for x in env:
-                if isinstance(env[x], tuple):
-                    tuple_var_types[x] = env[x]
-                if isinstance(env[x], DataclassType): # we do that here
-                    dataclass_var_types[x] = env[x]
-
+            # record any new tuples or dataclasses
+            for x, t in list(env.items()):
+                if isinstance(t, tuple):
+                    tuple_var_types[x] = t
+                elif isinstance(t, DataclassType):
+                    dataclass_var_types[x] = t
             return program
 
 
@@ -231,13 +267,13 @@ def rco(prog: Program) -> Program:
 
     def rco_stmt(stmt: Stmt, new_stmts: List[Stmt]) -> Stmt:
         match stmt:
-            case FieldRef(x, field): # IMPLEMENT here
+            case FieldRef(o, field):
                 # fieldref, make sure the expression inside the fieldref is atomic
-                pass
+                return FieldRef(rco_exp(o, new_stmts), field)
             
-            case ClassDef(name, field): # IMPLEMENT here
-                # classdef doesn't change (idk what that means just in the notes)
-                pass
+            case ClassDef(name, superclass, field):
+                # classdef doesn't change
+                return stmt
             case FunctionDef(name, params, body_stmts, return_type):
                 return FunctionDef(name, params, rco_stmts(body_stmts), return_type)
             case Return(e):
@@ -277,6 +313,8 @@ def rco(prog: Program) -> Program:
 
     def rco_exp(e: Expr, new_stmts: List[Stmt]) -> Expr:
         match e:
+            case FieldRef(o, field):
+                return FieldRef(rco_exp(o, new_stmts), field)
             case Call(func, args):
                 new_args = [rco_exp(e, new_stmts) for e in args]
                 new_func = rco_exp(func, new_stmts)
@@ -303,14 +341,95 @@ def rco(prog: Program) -> Program:
 
 
 def eliminate_objects(prog: Program) -> Program:
-    # 1. Delete class definitions
-    # -------
-    # 2. Replace function calls to object constructors with `Prim('tuple', args)` 
-    # (need to know which functions are actually object constructors; can be recorded in the typechecker)
-    # -------
-    # 3. Replace field references with tuple subscript 
-    # (need to know the index of each named field in the class defintiion; can be recorded in the typechecker)
-    pass
+    # prog.stmts is your top-level list of Stmts
+    def elim_expr(e: Expr, local_types: Dict[str, DataclassType]) -> Expr:
+        match e:
+            # 1) ctor calls → tuple
+            case Call(fn, args) if isinstance(fn, Var) and fn.name in dataclass_var_types:
+                return Prim('tuple', [elim_expr(a, local_types) for a in args])
+
+            # 2) normal calls
+            case Call(fn, args):
+                return Call(fn, [elim_expr(a, local_types) for a in args])
+
+            # 3) field read → subscript
+            case FieldRef(o, field):
+                o1 = elim_expr(o, local_types)
+                # first check locals, then globals
+                if isinstance(o, Var) and o.name in local_types:
+                    dt = local_types[o.name]
+                elif isinstance(o, Var) and o.name in dataclass_var_types:
+                    dt = dataclass_var_types[o.name]
+                else:
+                    raise Exception("elim_objects: unknown object", o)
+                # maintain the original field‐order
+                idx = list(dt.fields.keys()).index(field)
+                return Prim('subscript', [o1, Constant(idx)])
+
+            # 4) other prims
+            case Prim(op, args):
+                return Prim(op, [elim_expr(a, local_types) for a in args])
+
+            # 5) everything else
+            case _:
+                return e
+
+    def elim_stmt(s: Stmt, local_types: Dict[str, DataclassType]) -> Optional[Stmt]:
+        match s:
+            # drop class definitions entirely
+            case ClassDef(_, _, _):
+                return None
+
+            # descend into function bodies, but capture params
+            case FunctionDef(name, params, body, ret):
+                # build a fresh local mapping of param→DataclassType
+                new_locals: Dict[str, DataclassType] = {}
+                for (pname, ptype) in params:
+                    if isinstance(ptype, str) and ptype in dataclass_var_types:
+                        new_locals[pname] = dataclass_var_types[ptype]
+                    # or if it’s already a DataclassType, use it directly
+                    elif isinstance(ptype, DataclassType):
+                        new_locals[pname] = ptype
+
+                new_body = []
+                for st in body:
+                    st2 = elim_stmt(st, new_locals)
+                    if st2 is not None:
+                        new_body.append(st2)
+                return FunctionDef(name, params, new_body, ret)
+
+            # just rewrite the RHS
+            case Assign(x, e):
+                return Assign(x, elim_expr(e, local_types))
+
+            case Return(e):
+                return Return(elim_expr(e, local_types))
+
+            case Print(e):
+                return Print(elim_expr(e, local_types))
+
+            case If(cond, then_b, else_b):
+                then2 = [t for t in (elim_stmt(t, local_types) for t in then_b) if t]
+                else2 = [e for e in (elim_stmt(e, local_types) for e in else_b) if e]
+                return If(elim_expr(cond, local_types), then2, else2)
+
+            case While(cond, body):
+                body2 = [t for t in (elim_stmt(t, local_types) for t in body) if t]
+                return While(elim_expr(cond, local_types), body2)
+
+            case _:
+                return s
+
+    # top-level: no locals
+    out: List[Stmt] = []
+    for top in prog.stmts:
+        s2 = elim_stmt(top, {})
+        if s2 is not None:
+            out.append(s2)
+    return Program(out)
+
+                
+
 
 ##################################################
 # explicate-control
@@ -548,6 +667,10 @@ def _select_instructions(current_function: str, prog: cif.CProgram) -> x86.X86Pr
                 return x86.Immediate(int(i))
             case cif.Var(x):
                 return x86.Var(x)
+
+            case cif.Prim('subscript', [arr, cif.Constant(idx)]):
+                base = si_expr(arr)
+                return x86.Deref(base, int(idx) * 8)
             case _:
                 raise Exception('si_expr', a)
 
@@ -723,7 +846,10 @@ def _allocate_registers(current_function: str, program: x86.X86Program) -> x86.X
                 else:
                     return {x86.Var(x)}
             case x86.Deref(r, offset):
-                return set()
+                if isinstance(r, x86.Var) and r.name not in tuple_var_types:
+                   return { r }
+                else:
+                    return set()
             case _:
                 raise Exception('vars_arg', a)
 
@@ -947,7 +1073,7 @@ def _allocate_registers(current_function: str, program: x86.X86Program) -> x86.X
     for v in all_vars:
         homes[v] = color_map[coloring[v]]
     log('homes', homes)
-
+    
     # Step 5: replace variables with their homes
     blocks = program.blocks
     new_blocks = {label: ah_block(block) for label, block in blocks.items()}
@@ -1145,6 +1271,7 @@ allocate_alloc:
 compiler_passes = {
     'typecheck': typecheck,
     'remove complex opera*': rco,
+    'eliminate objects': eliminate_objects,
     'typecheck2': typecheck,
     'explicate control': explicate_control,
     'select instructions': select_instructions,
