@@ -1,3 +1,4 @@
+# Test 1: simple rectangle perimeter calculation
 class Rectangle:
     len: int
     width: int
@@ -5,8 +6,6 @@ class Rectangle:
 def perimeter(rectangle: Rectangle) -> int:
     return 2 * (rectangle.len + rectangle.width)
 
-r = Rectangle()
-r.len = 5
-r.width = 10
+r = Rectangle(5, 10)
 
-print(perimeter(r))
+print(perimeter(r)) # expect 30

@@ -1,14 +1,17 @@
   .globl main
-areastart:
+perimeterstart:
   movq %rdi, %r8
-  movq 0(%rdi), %rax
-  imulq 8(%rdi), %rax
+  movq 8(%rdi), %rax
+  addq 16(%rdi), %rax
+  movq %rax, %r8
+  movq $2, %rax
+  imulq %r8, %rax
   movq %rax, %r8
   movq %r8, %rax
-  jmp areaconclusion
+  jmp perimeterconclusion
   movq $0, %rax
-  jmp areaconclusion
-area:
+  jmp perimeterconclusion
+perimeter:
   pushq %rbp
   movq %rsp, %rbp
   pushq %rbx
@@ -16,8 +19,8 @@ area:
   pushq %r13
   pushq %r14
   subq $0, %rsp
-  jmp areastart
-areaconclusion:
+  jmp perimeterstart
+perimeterconclusion:
   addq $0, %rsp
   subq $0, %r15
   popq %r14
@@ -44,7 +47,7 @@ mainstart:
   pushq %r9
   pushq %r10
   movq -16(%r15), %rdi
-  callq area
+  callq perimeter
   popq %r10
   popq %r9
   popq %r8

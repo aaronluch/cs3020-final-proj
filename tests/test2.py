@@ -1,3 +1,4 @@
+# Test 2: area calculation 
 class Rectangle:
     len: int
     width: int
