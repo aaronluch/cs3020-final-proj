@@ -1,4 +1,4 @@
-from typing import Set, Dict
+from typing import Set, Dict, Optional
 import itertools
 import sys
 import traceback
@@ -12,12 +12,14 @@ import print_x86defs
 
 comparisons = ['eq', 'gt', 'gte', 'lt', 'lte']
 gensym_num = 0
-global_logging = True
+global_logging = False
 
 tuple_var_types = {}
-dataclass_var_types = {} # NEW type to record dataclass types
+dataclass_var_types = {}
 function_names = set()
-_homes: Dict[str, x86.Arg] = {}
+function_params: Dict[str, List[str]] = {}
+_homes: Dict[str, Dict[x86.Var, x86.Arg]] = {}
+
 
 def log(label, value):
     if global_logging:
@@ -113,7 +115,6 @@ def typecheck(program: Program) -> Program:
                 if field not in t_obj.fields:
                     raise Exception('field not found in dataclass:', field)
                 return t_obj.fields[field]
-                    
                    
             case Call(func, args):
                 arg_types = [tc_exp(a, env) for a in args]
@@ -179,33 +180,53 @@ def typecheck(program: Program) -> Program:
             
             case FunctionDef(name, params, body_stmts, return_type):
                 function_names.add(name)
+                function_params[name] = []
 
-                # Build the Callable signature from the *raw* annotations:
-                arg_types = [t for _, t in params]
-                env[name] = Callable(arg_types, return_type)
+                # register the function signature
+                #arg_types = [t for _, t in params]
+                real_arg_types = []
+                for pname, ptype in params:
+                    if isinstance(ptype, str) and ptype in dataclass_var_types:
+                        real_arg_types.append(dataclass_var_types[ptype])
+                    else:
+                        real_arg_types.append(ptype)
+                
+                if isinstance(return_type, str) and return_type in dataclass_var_types:
+                    real_ret = dataclass_var_types[return_type]
+                else:
+                    real_ret = return_type
+                    
+                env[name] = Callable(real_arg_types, real_ret)
 
-                # Now bind the params for the body, differently in Pass1 vs Pass2:
+                # make a fresh env for the body
                 new_env = env.copy()
                 for pname, ptype in params:
+                    function_params[name].append(pname)
                     if has_classes:
-                        # Pass 1: bind "Rectangle" → DataclassType
+                        # Pass 1: if the annotation is a dataclass name,
+                        #   1) record the param name in dataclass_var_types
+                        #   2) bind that name in the env to the DataclassType
                         if isinstance(ptype, str) and ptype in dataclass_var_types:
-                            new_env[pname] = dataclass_var_types[ptype]
+                            dt = dataclass_var_types[ptype]
+                            dataclass_var_types[pname] = dt
+                            new_env[pname] = dt
                         else:
-                            new_env[pname] = ptype
+                            new_env[pname] = ptype if not (has_classes) else ptype
+
                     else:
-                        # Pass 2: bind "Rectangle" → tuple-of-field-types
+                        # Pass 2: if we have a dataclass‐typed param,
+                        #   rebind it to the tuple of its field types
                         if isinstance(ptype, str) and ptype in dataclass_var_types:
                             dt = dataclass_var_types[ptype]
                             new_env[pname] = tuple(dt.fields.values())
                         else:
                             new_env[pname] = ptype
 
-                new_env['return value'] = return_type
+                new_env['return value'] = real_ret
                 tc_stmts(body_stmts, new_env)
-                
 
             case Return(e):
+                #print(env['return value'])
                 assert env['return value'] == tc_exp(e, env)
 
             case While(condition, body_stmts):
@@ -217,12 +238,19 @@ def typecheck(program: Program) -> Program:
                 tc_stmts(else_stmts, env)
             case Print(e):
                 tc_exp(e, env)
+                
             case Assign(x, e):
                 t_e = tc_exp(e, env)
+                if isinstance(t_e, DataclassType):
+                    env[x] = t_e
+                    dataclass_var_types[x] = t_e
+                    return
+                
                 if x in env:
                     assert t_e == env[x]
                 else:
                     env[x] = t_e
+                    
             case _:
                 raise Exception('tc_stmt', s)
 
@@ -665,14 +693,25 @@ def _select_instructions(current_function: str, prog: cif.CProgram) -> x86.X86Pr
         match a:
             case cif.Constant(i):
                 return x86.Immediate(int(i))
+
             case cif.Var(x):
+                # if x is one of this function’s parameters, return its arg‐reg
+                params = function_params.get(current_function, [])
+                if x in params:
+                    idx = params.index(x)
+                    reg_name = constants.argument_registers[idx]
+                    return x86.Reg(reg_name)
+                # otherwise keep it as a Var
                 return x86.Var(x)
 
             case cif.Prim('subscript', [arr, cif.Constant(idx)]):
                 base = si_expr(arr)
-                return x86.Deref(base, int(idx) * 8)
+                offset = 8 * (int(idx) + 1)
+                return x86.Deref(base.val, offset)
+
             case _:
                 raise Exception('si_expr', a)
+
 
     def si_stmts(stmts: List[cif.Stmt]) -> List[x86.Instr]:
         instrs = []
@@ -841,17 +880,13 @@ def _allocate_registers(current_function: str, program: x86.X86Program) -> x86.X
             case x86.ByteReg(r):
                 return set()
             case x86.Var(x):
-                if x in tuple_var_types:
-                    return set()
-                else:
-                    return {x86.Var(x)}
-            case x86.Deref(r, offset):
-                if isinstance(r, x86.Var) and r.name not in tuple_var_types:
-                   return { r }
-                else:
-                    return set()
+                return { x86.Var(x) } if x not in tuple_var_types else set()
+            case x86.Deref(x86.Var(x), _offset):
+                return { x86.Var(x) } if x not in tuple_var_types else set()
+            case x86.Deref(_, _):
+                return set()
             case _:
-                raise Exception('vars_arg', a)
+                return set()
 
     def reads_of(i: x86.Instr) -> Set[x86.Var]:
         match i:
@@ -1080,6 +1115,11 @@ def _allocate_registers(current_function: str, program: x86.X86Program) -> x86.X
 
     regular_stack_space = align(8 * stack_locations_used)
     root_stack_slots = len(tuple_homes)
+    
+    arg_regs = constants.argument_registers
+    for idx, param_name in enumerate(function_params.get(current_function, [])):
+        homes[param_name] = x86.Reg(arg_regs[idx])
+    _homes[current_function] = homes
 
     return x86.X86Program(new_blocks, stack_space = (regular_stack_space, root_stack_slots))
 
@@ -1111,20 +1151,33 @@ def patch_instructions(program: X86ProgramDefs) -> X86ProgramDefs:
         case X86ProgramDefs(defs):
             new_defs = []
             for d in defs:
-                new_prog = _patch_instructions(x86.X86Program(d.blocks))
+                homes = _homes.get(d.label, {})
+                new_prog = _patch_instructions(x86.X86Program(d.blocks), homes)
                 new_defs.append(X86FunctionDef(d.label, new_prog.blocks, d.stack_space))
             return X86ProgramDefs(new_defs)
 
 
-def _patch_instructions(program: x86.X86Program) -> x86.X86Program:
+def _patch_instructions(program: x86.X86Program, homes: Dict[x86.Var, x86.Arg]) -> x86.X86Program:
     """
     Patches instructions with two memory location inputs, using %rax as a temporary location.
     :param program: An x86 program.
     :return: A patched x86 program.
     """
+    def patch_arg(a: x86.Arg) -> x86.Arg:
+        match a:
+            case x86.Var(x) if x in homes:
+                return homes[x]     
+            case x86.Deref(x86.Var(x), off) if x in homes:
+                return x86.Deref(homes[x], off)
+            case _:
+                return a
 
-    def pi_instr(e: x86.Instr) -> List[x86.Instr]:
-        match e:
+
+    def pi_instr(instr: x86.Instr) -> List[x86.Instr]:
+        # first rewrite each argument
+        instr = instr.__class__(*(patch_arg(arg) for arg in instr.args)) if hasattr(instr, 'args') else instr
+        # then apply your existing memory–memory hack
+        match instr:
             case x86.Cmpq(a1, x86.Immediate(i)):
                 return [x86.Movq(x86.Immediate(i), x86.Reg('rax')),
                         x86.Cmpq(a1, x86.Reg('rax'))]
@@ -1138,13 +1191,9 @@ def _patch_instructions(program: x86.X86Program) -> x86.X86Program:
                 return [x86.Movq(x86.Deref(r1, o1), x86.Reg('rax')),
                         x86.Addq(x86.Reg('rax'), x86.Deref(r2, o2))]
             case _:
-                if isinstance(e, (x86.Callq, x86.Retq, x86.Movq, x86.Movzbq,
-                                  x86.Addq, x86.Subq, x86.Cmpq, x86.Imulq,
-                                  x86.Andq, x86.Orq, x86.Xorq, x86.Jmp, x86.JmpIf, x86.Set,
-                                  x86.Pushq, x86.Popq, x86.Leaq, x86.IndirectCallq)):
-                    return [e]
-                else:
-                    raise Exception('pi_instr', e)
+                # everything else just survives intact
+                return [instr]
+
 
     def pi_block(instrs: List[x86.Instr]) -> List[x86.Instr]:
         new_instrs = []
@@ -1283,7 +1332,7 @@ compiler_passes = {
 }
 
 
-def run_compiler(s, logging=False): # IDK if need to fix this up for new compiler (will figure out)
+def run_compiler(s, logging=False):
     global tuple_var_types, function_names, dataclass_var_types
     tuple_var_types = {}
     dataclass_var_types = {}
@@ -1303,6 +1352,9 @@ def run_compiler(s, logging=False): # IDK if need to fix this up for new compile
         print()
         print('Abstract syntax:')
         print(print_ast(current_program))
+        # print(dataclass_var_types)
+        # print(function_names)
+        # print(_homes)
 
     current_program = parse(s)
 
