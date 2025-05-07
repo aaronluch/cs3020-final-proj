@@ -109,6 +109,11 @@ def typecheck(program: Program) -> Program:
                 # first, typecheck the object expression
                 t_obj = tc_exp(o, env)
 
+                if isinstance(o, Var) and o.name in dataclass_var_types:
+                    t_obj = dataclass_var_types[o.name]
+                else:
+                    return t_obj
+
                 # 1) if it's still a DataclassType (first pass), just use it
                 if isinstance(t_obj, DataclassType):
                     if field not in t_obj.fields:
@@ -116,17 +121,12 @@ def typecheck(program: Program) -> Program:
                     return t_obj.fields[field]
 
                 # 2) if it's a raw tuple (second pass), recover the original DataclassType
-                if isinstance(t_obj, tuple) and isinstance(o, Var):
-                    if o.name not in dataclass_var_types:
-                        raise TypeError(f"No dataclass info available for tuple var {o.name!r}")
+                if isinstance(t_obj, tuple):
                     dt = dataclass_var_types[o.name]
-                    if field not in dt.fields:
-                        raise TypeError(f"field {field!r} not in dataclass {dt.name}")
                     return dt.fields[field]
 
                 # otherwise it really is an error
                 raise TypeError(f"Expected DataclassType or tuple for {o}, but got {t_obj}")
-
                    
             case Call(func, args):
                 arg_types = [tc_exp(a, env) for a in args]
@@ -317,7 +317,6 @@ def rco(prog: Program) -> Program:
             case FieldRef(o, field):
                 # fieldref, make sure the expression inside the fieldref is atomic
                 return FieldRef(rco_exp(o, new_stmts), field)
-            
             case ClassDef(name, superclass, field):
                 # classdef doesn't change
                 return stmt
@@ -381,14 +380,12 @@ def rco(prog: Program) -> Program:
                 return Var(new_v)
             case _:
                 raise Exception('rco_exp', e)
-
     match prog:
         case Program(stmts):
-            return Program(rco_stmts(stmts))
+            return Program(rco_stmts(stmts))      
 
 
 def eliminate_objects(prog: Program) -> Program:
-    # prog.stmts is your top-level list of Stmts
     def elim_expr(e: Expr, local_types: Dict[str, DataclassType]) -> Expr:
         match e:
             # 1) ctor calls → tuple
@@ -401,18 +398,35 @@ def eliminate_objects(prog: Program) -> Program:
 
             # 3) field read → subscript
             case FieldRef(o, field):
+                # 1) recurse into the object
                 o1 = elim_expr(o, local_types)
-                # first check locals, then globals
+
+                # 2) if it's any dataclass‐typed var (Point, p1, p2, p3)…
                 if isinstance(o, Var) and o.name in local_types:
                     dt = local_types[o.name]
+
                 elif isinstance(o, Var) and o.name in dataclass_var_types:
                     dt = dataclass_var_types[o.name]
+
+                # 3) otherwise if it's a raw tuple var, match its shape
+                elif isinstance(o, Var) and o.name in tuple_var_types:
+                    shape = tuple_var_types[o.name]
+                    for cls in dataclass_var_types.values():
+                        if tuple(cls.fields.values()) == shape:
+                            dt = cls
+                            break
+                    else:
+                        raise RuntimeError(f"No matching class for tuple {o.name}")
+
                 else:
-                    raise Exception("elim_objects: unknown object", o)
-                # maintain the original field‐order
+                    # nothing else should slip through
+                    raise RuntimeError(f"Unexpected FieldRef base: {o.name}, {type(o)}, {o}")
+
+                # 4) find which field index this is, and build a subscript
                 idx = list(dt.fields.keys()).index(field)
                 return Prim('subscript', [o1, Constant(idx)])
 
+            
             # 4) other prims
             case Prim(op, args):
                 return Prim(op, [elim_expr(a, local_types) for a in args])
@@ -422,6 +436,7 @@ def eliminate_objects(prog: Program) -> Program:
                 return e
 
     def elim_stmt(s: Stmt, local_types: Dict[str, DataclassType]) -> Optional[Stmt]:
+        #print(f'elim_stmt: {s}')
         match s:
             # drop class definitions entirely
             case ClassDef(_, _, _):
@@ -429,23 +444,19 @@ def eliminate_objects(prog: Program) -> Program:
 
             # descend into function bodies, but capture params
             case FunctionDef(name, params, body, ret):
-                # build a fresh local mapping of param→DataclassType
-                new_locals: Dict[str, DataclassType] = {}
-                for (pname, ptype) in params:
-                    if isinstance(ptype, str) and ptype in dataclass_var_types:
-                        new_locals[pname] = dataclass_var_types[ptype]
-                    # or if it’s already a DataclassType, use it directly
-                    elif isinstance(ptype, DataclassType):
-                        new_locals[pname] = ptype
-
-                new_body = []
-                for st in body:
-                    st2 = elim_stmt(st, new_locals)
-                    if st2 is not None:
-                        new_body.append(st2)
+                # build new local_types for parameters
+                new_locals = {
+                    pname: dataclass_var_types[ptype]
+                    for pname, ptype in params
+                    if isinstance(ptype, str) and ptype in dataclass_var_types
+                }
+                new_body = [
+                    elim_stmt(st, new_locals)
+                    for st in body
+                    if elim_stmt(st, new_locals) is not None
+                ]
                 return FunctionDef(name, params, new_body, ret)
 
-            # just rewrite the RHS
             case Assign(x, e):
                 return Assign(x, elim_expr(e, local_types))
 
@@ -474,8 +485,6 @@ def eliminate_objects(prog: Program) -> Program:
         if s2 is not None:
             out.append(s2)
     return Program(out)
-
-                
 
 
 ##################################################
