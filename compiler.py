@@ -216,6 +216,8 @@ def typecheck(program: Program) -> Program:
                     real_ret = dt if has_classes else tuple(dt.fields.values())
                     function_return_types[name] = dt
                 else:
+                    # just add type to the return types if it's not a dataclass
+                    function_return_types[name] = return_type
                     real_ret = return_type
                     
                 env[name] = Callable(real_arg_types, real_ret)
