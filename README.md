@@ -48,4 +48,4 @@ This compiler extension adds basic support for object-oriented dataclasses on to
    ```
    python run_tests.py      # ensure you are in the proper directory of `compiler.py`
    ```
-- __NOTE__: If you are building this with the prexisting CS3020 directory, you can simply drop `compiler.py` along with the tests folder into one of the existing assignment folders. All changes implemented are exclusive to `compiler.py`; no other files were modified.
+- __NOTE__: If you are building this with the prexisting CS3020 directory, you can simply drop `compiler.py` along with the tests folder into one of the existing assignment folders (assuming that directory has all required .py files used in the compiler i.e: a1 does *not* have all required files). All changes implemented are exclusive to `compiler.py`; no other files were modified.
