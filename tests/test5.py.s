@@ -4,16 +4,16 @@ add_pointstart:
   movq %rsi, %r8
   movq 8(%rdi), %rax
   addq 8(%rsi), %rax
-  movq %rax, %r13
+  movq %rax, %r14
   movq 16(%rdi), %rax
   addq 16(%rsi), %rax
-  movq %rax, %r14
+  movq %rax, %r13
   movq $24, %rdi
   callq allocate
   movq %rax, %r11
   movq $5, 0(%r11)
-  movq %r13, 8(%r11)
-  movq %r14, 16(%r11)
+  movq %r14, 8(%r11)
+  movq %r13, 16(%r11)
   movq %r11, -8(%r15)
   movq -8(%r15), %rax
   jmp add_pointconclusion
@@ -77,7 +77,7 @@ mainstart:
   popq %rdx
   movq %rax, %r8
   movq %r8, %r8
-  movq %r8, %rdi
+  movq 8(%r11), %rdi
   callq print_int
   movq $0, %rax
   jmp mainconclusion
