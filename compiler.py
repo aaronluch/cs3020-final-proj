@@ -106,15 +106,27 @@ def typecheck(program: Program) -> Program:
     def tc_exp(e: Expr, env: TEnv) -> type:
         match e:     
             case FieldRef(o, field):
-                # typecheck `e` and make sure it's a `DataclassType`: return the type
-                # of `field` from the `DataclassType` of `e`
-                # DataclassType is declared above globally
+                # first, typecheck the object expression
                 t_obj = tc_exp(o, env)
-                if not isinstance(t_obj, DataclassType):
-                    raise Exception('expected dataclass type, but got:', t_obj)
-                if field not in t_obj.fields:
-                    raise Exception('field not found in dataclass:', field)
-                return t_obj.fields[field]
+
+                # 1) if it's still a DataclassType (first pass), just use it
+                if isinstance(t_obj, DataclassType):
+                    if field not in t_obj.fields:
+                        raise TypeError(f"field {field!r} not in dataclass {t_obj.name}")
+                    return t_obj.fields[field]
+
+                # 2) if it's a raw tuple (second pass), recover the original DataclassType
+                if isinstance(t_obj, tuple) and isinstance(o, Var):
+                    if o.name not in dataclass_var_types:
+                        raise TypeError(f"No dataclass info available for tuple var {o.name!r}")
+                    dt = dataclass_var_types[o.name]
+                    if field not in dt.fields:
+                        raise TypeError(f"field {field!r} not in dataclass {dt.name}")
+                    return dt.fields[field]
+
+                # otherwise it really is an error
+                raise TypeError(f"Expected DataclassType or tuple for {o}, but got {t_obj}")
+
                    
             case Call(func, args):
                 arg_types = [tc_exp(a, env) for a in args]
@@ -192,7 +204,8 @@ def typecheck(program: Program) -> Program:
                         real_arg_types.append(ptype)
                 
                 if isinstance(return_type, str) and return_type in dataclass_var_types:
-                    real_ret = dataclass_var_types[return_type]
+                    dt = dataclass_var_types[return_type]
+                    real_ret = dt if has_classes else tuple(dt.fields.values())
                 else:
                     real_ret = return_type
                     
@@ -213,10 +226,11 @@ def typecheck(program: Program) -> Program:
                         else:
                             new_env[pname] = ptype if not (has_classes) else ptype
 
-                    else:
+                    if not has_classes:
                         # Pass 2: if we have a dataclass‐typed param,
                         #   rebind it to the tuple of its field types
                         if isinstance(ptype, str) and ptype in dataclass_var_types:
+                            #print("PASS 2: dataclass_var_types", dataclass_var_types)
                             dt = dataclass_var_types[ptype]
                             new_env[pname] = tuple(dt.fields.values())
                         else:
@@ -226,8 +240,10 @@ def typecheck(program: Program) -> Program:
                 tc_stmts(body_stmts, new_env)
 
             case Return(e):
+                expected_type = env['return value']
+                actual_type = tc_exp(e, env)
                 #print(env['return value'])
-                assert env['return value'] == tc_exp(e, env)
+                assert env['return value'] == tc_exp(e, env), f'Expected {expected_type}, but got {actual_type}'
 
             case While(condition, body_stmts):
                 assert tc_exp(condition, env) == bool
@@ -245,7 +261,10 @@ def typecheck(program: Program) -> Program:
                     env[x] = t_e
                     dataclass_var_types[x] = t_e
                     return
-                
+                if isinstance(t_e, tuple):
+                    tuple_var_types[x] = t_e
+                    env[x] = t_e
+                    return
                 if x in env:
                     assert t_e == env[x]
                 else:
