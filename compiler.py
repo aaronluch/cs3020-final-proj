@@ -1417,11 +1417,12 @@ def run_compiler(s, logging=False):
             print("-" * 65)
             for key, value in function_params.items():
                 print("{:<25} {:<40}".format(str(key), str(value)))
+            print("\n")
 
-            print("\n\n{:<25} {:<40}".format("Tuple Name", "Fields"))
-            print("-" * 65)
-            for key, value in tuple_var_types.items():
-                print("{:<25} {:<40}".format(str(key), str(value)))
+            # print("\n\n{:<25} {:<40}".format("Tuple Name", "Fields"))
+            # print("-" * 65)
+            # for key, value in tuple_var_types.items():
+            #     print("{:<25} {:<40}".format(str(key), str(value)))
                 
     current_program = parse(s)
 
