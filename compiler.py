@@ -15,10 +15,12 @@ gensym_num = 0
 global_logging = False
 
 tuple_var_types = {}
+
 dataclass_var_types = {}
 function_names = set()
 function_params: Dict[str, List[str]] = {}
 function_return_types = {}
+
 _homes: Dict[str, Dict[x86.Var, x86.Arg]] = {}
 debug_sets = True
 
@@ -441,7 +443,6 @@ def eliminate_objects(prog: Program) -> Program:
                 # 4) find which field index this is, and build a subscript
                 idx = list(dt.fields.keys()).index(field)
                 return Prim('subscript', [o1, Constant(idx)])
-
             
             # 4) other prims
             case Prim(op, args):
