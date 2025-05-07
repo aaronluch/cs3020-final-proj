@@ -43,9 +43,9 @@ This compiler extension adds basic support for object-oriented dataclasses on to
 1. Have Python 3.x installed.
 2. Ensure you have all required dependencies used in `compiler.py`
 3. Run `python compiler.py 'tests/testfile.py'` to compile and print x86 code and formatted output.
-4. Use `run_tests.py` to execute the all test cases concurrently:
-
+4. To use `run_tests.py` to execute the all test cases concurrently:
+   - First; you must download our version `run_tests.py`--this is because we did not modify the interpreter to handle this new implementation. The `run_tests.py` from the course directories handles these test cases differently.
+   - Then, execute:
    ```
    python run_tests.py      # ensure you are in the proper directory of `compiler.py`
    ```
-- __NOTE__: If you are building this with the prexisting CS3020 directory, you can simply drop `compiler.py` along with the tests folder into one of the existing assignment folders (assuming that directory has all required .py files used in the compiler i.e: a1 does *not* have all required files). All changes implemented are exclusive to `compiler.py`; no other files were modified.
