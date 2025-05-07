@@ -18,6 +18,7 @@ tuple_var_types = {}
 dataclass_var_types = {}
 function_names = set()
 function_params: Dict[str, List[str]] = {}
+function_return_types = {}
 _homes: Dict[str, Dict[x86.Var, x86.Arg]] = {}
 debug_sets = True
 
@@ -170,8 +171,15 @@ def typecheck(program: Program) -> Program:
                 return t
             case Prim('subscript', [e1, Constant(i)]):
                 t = tc_exp(e1, env)
-                assert isinstance(t, tuple)
-                return t[i]
+                # Handle both tuple types and DataclassType
+                if isinstance(t, tuple):
+                    return t[i]
+                elif isinstance(t, DataclassType):
+                    # If it's a dataclass type, get the field at the given index
+                    field_name = list(t.fields.keys())[i]
+                    return t.fields[field_name]
+                else:
+                    raise TypeError(f"Expected tuple or DataclassType for subscript, but got {t}")
             case Prim(op, args):
                 arg_types = [tc_exp(a, env) for a in args]
                 assert arg_types == prim_arg_types[op]
@@ -207,6 +215,7 @@ def typecheck(program: Program) -> Program:
                 if isinstance(return_type, str) and return_type in dataclass_var_types:
                     dt = dataclass_var_types[return_type]
                     real_ret = dt if has_classes else tuple(dt.fields.values())
+                    function_return_types[name] = dt
                 else:
                     real_ret = return_type
                     
@@ -262,6 +271,12 @@ def typecheck(program: Program) -> Program:
                     env[x] = t_e
                     dataclass_var_types[x] = t_e
                     return
+                if isinstance(e, Call) and isinstance(e.function, Var) and e.function.name in function_names:
+                    func_name = e.function.name
+                    if func_name in function_return_types:
+                        dataclass_var_types[x] = function_return_types[func_name]
+                        env[x] = function_return_types[func_name]
+                        return
                 if isinstance(t_e, tuple):
                     tuple_var_types[x] = t_e
                     env[x] = t_e
@@ -367,6 +382,12 @@ def rco(prog: Program) -> Program:
                 new_e = Call(new_func, new_args)
                 new_v = gensym('tmp')
                 new_stmts.append(Assign(new_v, new_e))
+
+                if isinstance(func, Var) and func.name in function_names:
+                    for cls_name, cls_type in dataclass_var_types.items():
+                        if cls_name == func.name or cls_name == getattr(func, 'output_type', None):
+                            dataclass_var_types[new_v] = cls_type
+                            break
                 return Var(new_v)
             case Var(x):
                 return Var(x)
@@ -404,19 +425,19 @@ def eliminate_objects(prog: Program) -> Program:
                 o1 = elim_expr(o, local_types)
 
                 # 2) if it's any dataclass‐typed var (Point, p1, p2, p3)…
-                if isinstance(o, Var) and o.name in local_types:
-                    dt = local_types[o.name]
-
-                elif isinstance(o, Var) and o.name in dataclass_var_types:
-                    dt = dataclass_var_types[o.name]
-
-                # 3) otherwise if it's a raw tuple var, match its shape
-                elif isinstance(o, Var) and o.name in tuple_var_types:
-                    shape = tuple_var_types[o.name]
-                    for cls in dataclass_var_types.values():
-                        if tuple(cls.fields.values()) == shape:
-                            dt = cls
-                            break
+                if isinstance(o, Var):
+                    if o.name in local_types:
+                        dt = local_types[o.name]
+                    elif o.name in dataclass_var_types:
+                        dt = dataclass_var_types[o.name]
+                    # Check if this is a result of a function returning a dataclass
+                    elif o.name.startswith('tmp_') or o.name in function_params.get('main', []):
+                        # Try to find a dataclass that has the field we're accessing
+                        for cls_name, cls_type in dataclass_var_types.items():
+                            if isinstance(cls_type, DataclassType) and field in cls_type.fields:
+                                dt = cls_type
+                                dataclass_var_types[o.name] = dt  # Track this for future references
+                                break
                         
                 if dt is None:
                     raise TypeError(f"Expected DataclassType or tuple for {o}, but got {dt}")
@@ -739,7 +760,13 @@ def _select_instructions(current_function: str, prog: cif.CProgram) -> x86.X86Pr
             case cif.Prim('subscript', [arr, cif.Constant(idx)]):
                 base = si_expr(arr)
                 offset = 8 * (int(idx) + 1)
-                return x86.Deref(base.val, offset)
+                
+                if isinstance(base, x86.Reg):
+                    return x86.Deref(base.val, offset)
+                elif isinstance(base, x86.Var):
+                    return x86.Deref('r11', offset)
+                else:
+                    return x86.Deref(base, offset)
 
             case _:
                 raise Exception('si_expr', a)
@@ -1384,16 +1411,27 @@ def run_compiler(s, logging=False):
         print()
         print('Abstract syntax:')
         print(print_ast(current_program))
-        
+            
         if debug_sets:
+            print("\n{:<25} {:<40}".format("Dataclass Name", "Fields"))
+            print("-" * 65)
             for name, fields in dataclass_var_types.items():
-                print(f"dataclass name: {name},\t\t value: {fields}")
-            print("function names:", function_names)
-            for key, value in function_params.items():
-                print(f"function params key: {key}, value: {value}")
-            for key, value in tuple_var_types.items():
-                print(f"tuple key: {key}, value: {value}")
+                print("{:<25} {:<40}".format(str(name), str(fields)))
 
+            print("\n\n{:<25} {:<40}".format("Function Name", "Return Type"))
+            print("-" * 65)
+            for name, ret_type in function_return_types.items():
+                print("{:<25} {:<40}".format(str(name), str(ret_type)))
+
+            print("\n\n{:<25} {:<40}".format("Function Name", "Parameters"))
+            print("-" * 65)
+            for key, value in function_params.items():
+                print("{:<25} {:<40}".format(str(key), str(value)))
+
+            print("\n\n{:<25} {:<40}".format("Tuple Name", "Fields"))
+            print("-" * 65)
+            for key, value in tuple_var_types.items():
+                print("{:<25} {:<40}".format(str(key), str(value)))
                 
     current_program = parse(s)
 
@@ -1437,4 +1475,3 @@ if __name__ == '__main__':
             except:
                 print('Error during compilation! **************************************************')
                 traceback.print_exception(*sys.exc_info())
-
