@@ -116,13 +116,13 @@ def typecheck(program: Program) -> Program:
                 else:
                     return t_obj
 
-                # 1) if it's still a DataclassType (first pass), just use it
+                # if it's still a DataclassType (first pass), just use it
                 if isinstance(t_obj, DataclassType):
                     if field not in t_obj.fields:
                         raise TypeError(f"field {field!r} not in dataclass {t_obj.name}")
                     return t_obj.fields[field]
 
-                # 2) if it's a raw tuple (second pass), recover the original DataclassType
+                # if it's a raw tuple (second pass), recover the original DataclassType
                 if isinstance(t_obj, tuple):
                     dt = dataclass_var_types[o.name]
                     return dt.fields[field]
@@ -171,11 +171,11 @@ def typecheck(program: Program) -> Program:
                 return t
             case Prim('subscript', [e1, Constant(i)]):
                 t = tc_exp(e1, env)
-                # Handle both tuple types and DataclassType
+                # handle both tuple types and DataclassType
                 if isinstance(t, tuple):
                     return t[i]
                 elif isinstance(t, DataclassType):
-                    # If it's a dataclass type, get the field at the given index
+                    # if it's a dataclass type, get the field at the given index
                     field_name = list(t.fields.keys())[i]
                     return t.fields[field_name]
                 else:
@@ -204,7 +204,6 @@ def typecheck(program: Program) -> Program:
                 function_params[name] = []
 
                 # register the function signature
-                #arg_types = [t for _, t in params]
                 real_arg_types = []
                 for pname, ptype in params:
                     if isinstance(ptype, str) and ptype in dataclass_var_types:
@@ -240,7 +239,6 @@ def typecheck(program: Program) -> Program:
                         # Pass 2: if we have a dataclass‐typed param,
                         #   rebind it to the tuple of its field types
                         if isinstance(ptype, str) and ptype in dataclass_var_types:
-                            #print("PASS 2: dataclass_var_types", dataclass_var_types)
                             dt = dataclass_var_types[ptype]
                             new_env[pname] = tuple(dt.fields.values())
                         else:
@@ -252,7 +250,6 @@ def typecheck(program: Program) -> Program:
             case Return(e):
                 expected_type = env['return value']
                 actual_type = tc_exp(e, env)
-                #print(env['return value'])
                 assert env['return value'] == tc_exp(e, env), f'Expected {expected_type}, but got {actual_type}'
 
             case While(condition, body_stmts):
@@ -293,8 +290,7 @@ def typecheck(program: Program) -> Program:
         for s in stmts:
             tc_stmt(s, env)
 
-    match program:  # WE ALSO need to record all dataclass-valued variables 
-                    # (like we did for tuple-valued vars in A6) [into dataclass_var_types]
+    match program:
         case Program(stmts):
             env = {}
             tc_stmts(stmts, env)
@@ -331,7 +327,6 @@ def rco(prog: Program) -> Program:
     def rco_stmt(stmt: Stmt, new_stmts: List[Stmt]) -> Stmt:
         match stmt:
             case FieldRef(o, field):
-                # fieldref, make sure the expression inside the fieldref is atomic
                 return FieldRef(rco_exp(o, new_stmts), field)
             case ClassDef(name, superclass, field):
                 return stmt
@@ -408,9 +403,8 @@ def rco(prog: Program) -> Program:
 
 def eliminate_objects(prog: Program) -> Program:
     def elim_expr(e: Expr, local_types: Dict[str, DataclassType]) -> Expr:
-        #print(f'elim_expr: {e}')
         match e:
-            # 1) ctor calls → tuple
+            # 1) constructor calls -> tuple
             case Call(fn, args) if isinstance(fn, Var) and fn.name in dataclass_var_types:
                 return Prim('tuple', [elim_expr(a, local_types) for a in args])
 
@@ -418,7 +412,7 @@ def eliminate_objects(prog: Program) -> Program:
             case Call(fn, args):
                 return Call(fn, [elim_expr(a, local_types) for a in args])
 
-            # 3) field read → subscript
+            # 3) field read -> subscript
             case FieldRef(o, field):
                 dt = None # default to None
                 # 1) recurse into the object
@@ -430,13 +424,13 @@ def eliminate_objects(prog: Program) -> Program:
                         dt = local_types[o.name]
                     elif o.name in dataclass_var_types:
                         dt = dataclass_var_types[o.name]
-                    # Check if this is a result of a function returning a dataclass
+                    # check if this is a result of a function returning a dataclass
                     elif o.name.startswith('tmp_') or o.name in function_params.get('main', []):
-                        # Try to find a dataclass that has the field we're accessing
+                        # try to find a dataclass that has the field we're accessing
                         for cls_name, cls_type in dataclass_var_types.items():
                             if isinstance(cls_type, DataclassType) and field in cls_type.fields:
                                 dt = cls_type
-                                dataclass_var_types[o.name] = dt  # Track this for future references
+                                dataclass_var_types[o.name] = dt  # track this
                                 break
                         
                 if dt is None:
@@ -456,7 +450,6 @@ def eliminate_objects(prog: Program) -> Program:
                 return e
 
     def elim_stmt(s: Stmt, local_types: Dict[str, DataclassType]) -> Optional[Stmt]:
-        #print(f'elim_stmt: {s}')
         match s:
             # drop class definitions entirely
             case ClassDef(name, superclass, body):
@@ -1233,9 +1226,7 @@ def _patch_instructions(program: x86.X86Program, homes: Dict[x86.Var, x86.Arg]) 
 
 
     def pi_instr(instr: x86.Instr) -> List[x86.Instr]:
-        # first rewrite each argument
         instr = instr.__class__(*(patch_arg(arg) for arg in instr.args)) if hasattr(instr, 'args') else instr
-        # then apply your existing memory–memory hack
         match instr:
             case x86.Cmpq(a1, x86.Immediate(i)):
                 return [x86.Movq(x86.Immediate(i), x86.Reg('rax')),
@@ -1250,7 +1241,6 @@ def _patch_instructions(program: x86.X86Program, homes: Dict[x86.Var, x86.Arg]) 
                 return [x86.Movq(x86.Deref(r1, o1), x86.Reg('rax')),
                         x86.Addq(x86.Reg('rax'), x86.Deref(r2, o2))]
             case _:
-                # everything else just survives intact
                 return [instr]
 
 
