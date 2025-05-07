@@ -10,3 +10,4 @@ p1 = Point(1, 2)
 p2 = Point(3, 4)
 p3 = add_point(p1, p2)
 print(p3.x) # expect 4
+print(p3.y) # expect 6
