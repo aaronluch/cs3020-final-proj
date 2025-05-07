@@ -19,6 +19,7 @@ dataclass_var_types = {}
 function_names = set()
 function_params: Dict[str, List[str]] = {}
 _homes: Dict[str, Dict[x86.Var, x86.Arg]] = {}
+debug_sets = True
 
 
 def log(label, value):
@@ -221,8 +222,8 @@ def typecheck(program: Program) -> Program:
                         #   2) bind that name in the env to the DataclassType
                         if isinstance(ptype, str) and ptype in dataclass_var_types:
                             dt = dataclass_var_types[ptype]
-                            dataclass_var_types[pname] = dt
                             new_env[pname] = dt
+                            dataclass_var_types[pname] = dt
                         else:
                             new_env[pname] = ptype if not (has_classes) else ptype
 
@@ -318,7 +319,6 @@ def rco(prog: Program) -> Program:
                 # fieldref, make sure the expression inside the fieldref is atomic
                 return FieldRef(rco_exp(o, new_stmts), field)
             case ClassDef(name, superclass, field):
-                # classdef doesn't change
                 return stmt
             case FunctionDef(name, params, body_stmts, return_type):
                 return FunctionDef(name, params, rco_stmts(body_stmts), return_type)
@@ -387,6 +387,7 @@ def rco(prog: Program) -> Program:
 
 def eliminate_objects(prog: Program) -> Program:
     def elim_expr(e: Expr, local_types: Dict[str, DataclassType]) -> Expr:
+        #print(f'elim_expr: {e}')
         match e:
             # 1) ctor calls → tuple
             case Call(fn, args) if isinstance(fn, Var) and fn.name in dataclass_var_types:
@@ -398,6 +399,7 @@ def eliminate_objects(prog: Program) -> Program:
 
             # 3) field read → subscript
             case FieldRef(o, field):
+                dt = None # default to None
                 # 1) recurse into the object
                 o1 = elim_expr(o, local_types)
 
@@ -415,12 +417,9 @@ def eliminate_objects(prog: Program) -> Program:
                         if tuple(cls.fields.values()) == shape:
                             dt = cls
                             break
-                    else:
-                        raise RuntimeError(f"No matching class for tuple {o.name}")
-
-                else:
-                    # nothing else should slip through
-                    raise RuntimeError(f"Unexpected FieldRef base: {o.name}, {type(o)}, {o}")
+                        
+                if dt is None:
+                    raise TypeError(f"Expected DataclassType or tuple for {o}, but got {dt}")
 
                 # 4) find which field index this is, and build a subscript
                 idx = list(dt.fields.keys()).index(field)
@@ -439,8 +438,13 @@ def eliminate_objects(prog: Program) -> Program:
         #print(f'elim_stmt: {s}')
         match s:
             # drop class definitions entirely
-            case ClassDef(_, _, _):
+            case ClassDef(name, superclass, body):
+                dataclass_var_types[name] = DataclassType(
+                    name=name,
+                    fields={fname: ftype for fname, ftype in body}
+                )
                 return None
+
 
             # descend into function bodies, but capture params
             case FunctionDef(name, params, body, ret):
@@ -1380,10 +1384,17 @@ def run_compiler(s, logging=False):
         print()
         print('Abstract syntax:')
         print(print_ast(current_program))
-        # print(dataclass_var_types)
-        # print(function_names)
-        # print(_homes)
+        
+        if debug_sets:
+            for name, fields in dataclass_var_types.items():
+                print(f"dataclass name: {name},\t\t value: {fields}")
+            print("function names:", function_names)
+            for key, value in function_params.items():
+                print(f"function params key: {key}, value: {value}")
+            for key, value in tuple_var_types.items():
+                print(f"tuple key: {key}, value: {value}")
 
+                
     current_program = parse(s)
 
     if logging == True:
