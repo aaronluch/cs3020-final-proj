@@ -1,5 +1,4 @@
 # CS 3020 - Dataclasses (Simple Object System)
-### Group Members: Aaron Luciano, Walter Clay
 ## Overview
 
 This compiler extension adds basic support for object-oriented dataclasses on top of the existing tuple and function backend. We track named fields at compile time, allow dot‑access and constructor syntax in the front end, and then lower all dataclass operations into plain tuple and subscript primitives before generating x86.
